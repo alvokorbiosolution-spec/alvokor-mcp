@@ -4,7 +4,7 @@ import { z } from "zod";
 import {
   createDraft, getConfigStatus, getPublishStatus, listBrands, listChannels,
   listPortals, listSchedules, schedulePost, uploadImageFromUrl
-} from "@/lib/zoho-social";
+} from "@/zoho-social";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
