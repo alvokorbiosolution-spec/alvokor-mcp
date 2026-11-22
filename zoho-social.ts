@@ -29,29 +29,35 @@ async function getAccessToken(): Promise<string> {
   };
 
   if (!response.ok || !payload.access_token) {
-    // Deliberately do not include request credentials or token values in errors.
     throw new Error(`Zoho OAuth refresh failed (${response.status}): ${payload.error || "No access token returned"}`);
   }
-
   return payload.access_token;
 }
 
-async function zohoGet(path: string, headers: Record<string, string> = {}, query?: Record<string, string>) {
+async function zohoRequest(
+  method: "GET" | "POST" | "PUT",
+  path: string,
+  portalId: string,
+  brandId: string,
+  body?: unknown,
+  query?: Record<string, string>
+) {
   const token = await getAccessToken();
   const url = new URL(`${socialApiBase}/social/v2/${path.replace(/^\/+/, "")}`);
-  if (query) {
-    for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value);
-  }
+  if (query) for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value);
 
   const response = await fetch(url, {
-    method: "GET",
+    method,
     headers: {
       Authorization: `Zoho-oauthtoken ${token}`,
       Accept: "application/json",
-      ...headers
+      portal_id: portalId,
+      brand_id: brandId,
+      ...(body === undefined ? {} : { "Content-Type": "application/json" })
     },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     cache: "no-store",
-    signal: AbortSignal.timeout(15000)
+    signal: AbortSignal.timeout(20000)
   });
 
   const payload = await response.json().catch(() => ({}));
@@ -63,9 +69,28 @@ async function zohoGet(path: string, headers: Record<string, string> = {}, query
   return payload;
 }
 
+async function zohoGet(path: string, headers: Record<string, string> = {}, query?: Record<string, string>) {
+  const token = await getAccessToken();
+  const url = new URL(`${socialApiBase}/social/v2/${path.replace(/^\/+/, "")}`);
+  if (query) for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value);
+  const response = await fetch(url, {
+    method: "GET",
+    headers: { Authorization: `Zoho-oauthtoken ${token}`, Accept: "application/json", ...headers },
+    cache: "no-store",
+    signal: AbortSignal.timeout(15000)
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const code = typeof payload?.error?.code === "number" ? payload.error.code : response.status;
+    const message = typeof payload?.error?.message === "string" ? payload.error.message : "Zoho Social API request failed";
+    throw new Error(`Zoho Social API error ${code}: ${message}`);
+  }
+  return payload;
+}
+
 export function getConfigStatus() {
   return {
-    accountsRegion: accountsBase.endsWith("zoho.eu") ? "EU" : "custom",
+    accountsRegion: accountsBase.includes("zoho.eu") ? "EU" : accountsBase.includes("zoho.com") ? "US/global" : "custom",
     hasClientId: Boolean(process.env.ZOHO_CLIENT_ID),
     hasClientSecret: Boolean(process.env.ZOHO_CLIENT_SECRET),
     hasRefreshToken: Boolean(process.env.ZOHO_REFRESH_TOKEN),
@@ -84,8 +109,29 @@ export async function listBrands(portalId: string) {
 }
 
 export async function listChannels(portalId: string, brandId: string) {
-  return zohoGet("channels", {
-    portal_id: portalId,
-    brand_id: brandId
-  }, { fields: "id,name,network,status,profile_id" });
+  return zohoGet("channels", { portal_id: portalId, brand_id: brandId }, { fields: "id,name,network,status,profile_id" });
+}
+
+export async function createDraft(portalId: string, brandId: string, post: Record<string, unknown>) {
+  return zohoRequest("POST", "posts/drafts", portalId, brandId, { post: { ...post, type: "draft" } });
+}
+
+export async function schedulePost(portalId: string, brandId: string, post: Record<string, unknown>) {
+  return zohoRequest("POST", "posts/schedules", portalId, brandId, { post: { ...post, type: "schedule" } });
+}
+
+export async function uploadImageFromUrl(portalId: string, brandId: string, imageUrl: string, fileName?: string) {
+  const body: Record<string, string> = { image_url: imageUrl };
+  if (fileName) body.file_name = fileName;
+  return zohoRequest("POST", "attachments/upload", portalId, brandId, body);
+}
+
+export async function listSchedules(portalId: string, brandId: string, networks: string, offset = 0, limit = 20) {
+  return zohoRequest("GET", "posts/schedules", portalId, brandId, undefined, {
+    networks, offset: String(offset), limit: String(Math.min(limit, 100))
+  });
+}
+
+export async function getPublishStatus(portalId: string, brandId: string, postId: string) {
+  return zohoRequest("GET", `posts/publish/${encodeURIComponent(postId)}`, portalId, brandId);
 }
